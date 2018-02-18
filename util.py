@@ -114,7 +114,7 @@ def load_model_embedding(word, model, retry=False, emb_shape=[300]):
     try:
         return constant(model.word_vec(word)), True
     except KeyError:
-        log("warn", "Missing embedding for word '%s' in model" % word)
+        # log("warn", "Missing embedding for word '%s' in model" % word)
         if retry:
             return load_pre_built_embedding(spell(word), model, retry=False)
         else:

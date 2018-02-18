@@ -142,36 +142,76 @@ class CNN():
             )
         ]
 
-        self._eval_nn = self._nn_hidden_layer(
-            self._nn_mention_pair_embedding(
-                emb_features_placeholders,
-                d_features_placeholders,
-                mention_pair_placeholders),
-            tensorflow.nn.relu
+        self._eval_nn = tensorflow.reduce_max(
+            self._nn_hidden_layer(
+                self._nn_mention_pair_embedding(
+                    emb_features_placeholders,
+                    d_features_placeholders,
+                    mention_pair_placeholders),
+                tensorflow.nn.relu
+            ),
+            axis=[3, 2]
         )
 
-        res = tensorflow.reduce_max(self._eval_nn, axis=[3, 2])
-        loss = self.loss(label_placeholder, res)
+        loss = self.loss(label_placeholder, self._eval_nn)
         self._train_nn = self.optimizer.minimize(loss)
+
+    def _feature_placeholder_name(self, pref, feature):
+        return pref % feature["name"]
+    
+    def _create_placeholder_array(self, session, array, lambda_name, lambda_val):
+        graph = tensorflow.get_default_graph()
+
+        placeholders = {}
+        for element in array:
+            placeholders[graph.get_tensor_by_name(
+                self._feature_placeholder_name(lambda_name, element)
+            )] = session.run(lambda_val(element))
+        return placeholders
 
     def train_nn(self, session, mention_pair, label):
         graph = tensorflow.get_default_graph()
 
         placeholders = {}
-        for f in self.embedding_features:
-            placeholders[graph.get_tensor_by_name("emb_feature_%s:0" % f["name"])] = \
-                session.run(f["func"](mention_pair[0]))
-            placeholders[graph.get_tensor_by_name("emb_feature_%s_1:0" % f["name"])] = \
-                session.run(f["func"](mention_pair[1]))
-        for f in self.semantic_features:
-            placeholders[graph.get_tensor_by_name("semantic_feature_%s:0" % f["name"])] = \
-                session.run(f["func"](mention_pair[0]))
-            placeholders[graph.get_tensor_by_name("semantic_feature_%s_1:0" % f["name"])] = \
-                session.run(f["func"](mention_pair[1]))
-        for f in self.mention_pair_features:
-            placeholders[graph.get_tensor_by_name("mention_pair_feature_%s:0" % f["name"])] = \
-                session.run(f["func"](mention_pair))
+
+        arrays = [self.embedding_features, self.embedding_features,
+                  self.semantic_features, self.semantic_features,
+                  self.mention_pair_features]
+        names = ["emb_feature_%s:0", "emb_feature_%s_1:0",
+                 "semantic_feature_%s:0", "semantic_feature_%s_1:0",
+                 "mention_pair_feature_%s:0"]
+        lambda_vals = [lambda x: x["func"](mention_pair[0]),
+                       lambda x: x["func"](mention_pair[1]),
+                       lambda x: x["func"](mention_pair[0]),
+                       lambda x: x["func"](mention_pair[1]),
+                       lambda x: x["func"](mention_pair)]
+        for a, n, v in zip(arrays, names, lambda_vals):
+            placeholders.update(
+                self._create_placeholder_array(session, a, n, v)
+            )
+
         placeholders[graph.get_tensor_by_name("label:0")] = \
-            session.run(tensorflow.constant([label], dtype=tensorflow.float32))
+            session.run(label)
 
         session.run(self._train_nn, feed_dict=placeholders)
+
+    def evaluate(self, session, mention_pair):
+        placeholders = {}
+
+        arrays = [self.embedding_features, self.embedding_features,
+                  self.semantic_features, self.semantic_features,
+                  self.mention_pair_features]
+        names = ["emb_feature_%s:0", "emb_feature_%s_1:0",
+                 "semantic_feature_%s:0", "semantic_feature_%s_1:0",
+                 "mention_pair_feature_%s:0"]
+        lambda_vals = [lambda x: x["func"](mention_pair[0]),
+                       lambda x: x["func"](mention_pair[1]),
+                       lambda x: x["func"](mention_pair[0]),
+                       lambda x: x["func"](mention_pair[1]),
+                       lambda x: x["func"](mention_pair)]
+        for a, n, v in zip(arrays, names, lambda_vals):
+            placeholders.update(
+                self._create_placeholder_array(session, a, n, v)
+            )
+
+        return session.run(self._eval_nn, feed_dict=placeholders)

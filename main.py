@@ -1,9 +1,10 @@
 """ Main function. """
 
-from util import is_word, load_model_embedding, info_from_line
+from util import is_word, load_model_embedding, info_from_line, log
 from read import InputData
 from nn import CNN
 
+import time
 from gensim.models import KeyedVectors
 from functools import partial
 import tensorflow
@@ -26,7 +27,7 @@ def print_info_map(map_name, map_data, top_k):
         print("     %s -> %d" % (k, v))
     print("======================")
 
-def create_file_info(path):
+def create_file_info(path, prefix=""):
     inp = readFile(path)
 
     words = {}
@@ -36,6 +37,11 @@ def create_file_info(path):
     last_mention = 0
     last_mention_sentence = 0
 
+    documents = None
+    if prefix:
+        documents = inp.get_documents_by_prefix(prefix)
+    else:
+        documents = inp.get_all_documents()
     for d in inp.documents:
         for u in d.children:
             print("utterance embedding", u.embeddings)
@@ -93,26 +99,37 @@ def create_and_train(file, emb_features, d_features, mention_pair_features):
     session = tensorflow.Session(config=config)
     session.run(tensorflow.global_variables_initializer())
 
-    idx = 0
-    for d in inp.documents:
+    documents = inp.get_documents_by_prefix("(/friends-s01e01)")
+
+    for d in documents:
         mentions = d.get_mentions()
-        mention_pairs = [mp for mp in zip(mentions[:-1], mentions[1:])]
-        i = 0
-        for pair in mention_pairs:
+        pairs = list(zip(mentions[:-1], mentions[1:]))
+        mention_pairs = [mp for mp in pairs]
+        labels = [(1.0 if mp[0].mentionId == mp[1].mentionId else 0.0) for mp in pairs]
+        t_s = time.time()
+        for pair, label in zip(pairs, labels):
             nn.train_nn(session,
                         mention_pair=pair,
-                        label=(1.0 if pair[0].mentionId == pair[1].mentionId else 0.0))
-        if i % 500 == 0:
-            print("Trained %s/%s mentions" % (i, len(mention_pairs)))
-        idx = idx + 1
-        if idx > 2:
-            break
+                        label=label)
+        t_e = time.time()
+        log("info",
+            "Trained %d mentions in %0.3f min" % (len(mention_pairs), (t_e - t_s) / 60))
+
+#    documents = inp.get_documents_by_prefix("(/friends-s01e02)")
+#    for d in documents:
+#        mentions = d.get_mentions()
+#        mention_pairs = [mp for mp in zip(mentions[:-1], mentions[1:])]
+#        t_s = time.time()
+#        res = nn.evaluate(session, mention_pairs=pairs)
+#        log("info", "NN predict: %s vs label: %s" % \
+#             (res, pair[0].mentionId == pair[1].mentionId))
+#        t_e = time.time()
+#        log("info",
+#            "Trained %d mentions in %0.3f min" % (len(mention_pairs), (t_e - t_s) / 60))
     return nn
 
 def mention_emb(mention):
-    return tensorflow.stack(
-        [tensorflow.reduce_mean(mention.embeddings, axis=0, keep_dims=True)]
-    )
+    return tensorflow.reduce_mean(mention.embeddings, axis=0, keep_dims=True)
 
 def gender_info(mention):
     return tensorflow.zeros(shape=[1, 1, 1, 5], dtype=tensorflow.float32)

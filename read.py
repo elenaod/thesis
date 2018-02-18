@@ -308,12 +308,20 @@ class InputData():
         self._columnInfo = colInfo
         self.wordEmbeddings = wordEmbeddings
         self.filters = filters
-        self.documents = []
+        self._document_data = []
         with open(self._filename, 'r') as f:
             self._extract_common(f)
-        self.documents = (
+
+    def get_all_documents(self):
+        return (
             Document([self._columnInfo(l) for l in s["lines"]], s["name"], self) \
-                     for s in self.documents
+                     for s in self._document_data
+        )
+
+    def get_documents_by_prefix(self, prefix):
+        return (
+            Document([self._columnInfo(l) for l in s["lines"]], s["name"], self) \
+            for s in self._document_data if s["name"].startswith(prefix)
         )
 
     def _extract_common(self, f):
@@ -325,5 +333,5 @@ class InputData():
                (len(docs_begin), len(docs_end))
         log("info", "%d documents found in input data" % len(docs_begin))
         for d in zip(docs_begin, docs_end):
-            doc_name = " ".join(lines[d[0]].split(" ")[1:])
-            self.documents.append({"lines": lines[d[0] + 1:d[1]], "name": doc_name})
+            doc_name = " ".join(lines[d[0]].split(" ")[2:])
+            self._document_data.append({"lines": lines[d[0] + 1:d[1]], "name": doc_name})
