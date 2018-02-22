@@ -6,14 +6,14 @@ from numpy import load
 from gensim.models import KeyedVectors
 from autocorrect import spell
 from tensorflow import zeros, constant, float32, add, multiply, stack, \
-                       reduce_mean, concat
+                       reduce_mean, concat, unstack
 
 _RE_NUM = re.compile("[0-9]")
 _RE_WORD = re.compile("[a-zA-Z]")
 _RE_SPECIAL = re.compile("[^0-9a-zA-Z_-]")
 _STOPWORDS = ['a', 'to', 'and', 'of'] # stopwords.words("english")
 
-EMBEDDING_SHAPE = [1, 300]
+EMBEDDING_SHAPE = [1, 1, 300]
 
 # TODO: do not read the file all at once, we do not need to load it into the
 # RAM entirely to extract the data
@@ -110,15 +110,13 @@ def load_pre_built_embedding(word, data_dir, retry=True, emb_shape=[300]):
         else:
             return zeros(shape=emb_shape, dtype=float32), False
 
-def load_model_embedding(word, model, retry=False, emb_shape=[300]):
+def load_model_embedding(word, model, emb_shape=[1, 300]):
+    # returns a tensor with shape [300]
     try:
-        return constant(model.word_vec(word)), True
+        return stack([constant(model.word_vec(word))]), True
     except KeyError:
         # log("warn", "Missing embedding for word '%s' in model" % word)
-        if retry:
-            return load_pre_built_embedding(spell(word), model, retry=False)
-        else:
-            return zeros(shape=emb_shape, dtype=float32), False
+        return zeros(shape=emb_shape, dtype=float32), False
 
 def load_embedding(word, data_dir="vocab", model=None, emb_shape=[300]):
     """
@@ -165,3 +163,15 @@ def create_feed_dict(session, placeholder_arr, val_arr):
 def multiply_and_add(inp, weights, biases):
     """ Helper function to perform w * x + b """
     return add(multiply(inp, weights), biases)
+
+def flatten(lst):
+    res = []
+    for e in lst:
+        res = res + e
+    return res
+
+def repack_tensors(tensors, axis):
+    return stack(
+        flatten([unstack(t, axis=axis) for t in tensors]),
+        axis=axis
+    )

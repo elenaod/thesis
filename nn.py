@@ -1,5 +1,14 @@
 import tensorflow
 
+def variable_summary(name, var):
+    mean = tensorflow.reduce_mean(var)
+    vmax = tensorflow.reduce_max(var)
+    vmin = tensorflow.reduce_min(var)
+    tensorflow.summary.scalar("mean_%s" % name, mean)
+    tensorflow.summary.scalar("max_%s" % name, vmax)
+    tensorflow.summary.scalar("min_%s" % name, vmin)
+    tensorflow.summary.histogram("histogram_%s" % name, var)
+
 class CNN():
     """
     Class to represent the convolutional neural network used in the framework.
@@ -34,62 +43,64 @@ class CNN():
         )
 
     def _nn_mention_embedding(self, emb_features, d_features, reuse_conv):
-        return tensorflow.concat(
-                [tensorflow.layers.max_pooling2d(
-                        tensorflow.layers.conv2d(
-                                tensorflow.concat(
-                                    [tensorflow.layers.max_pooling2d(
-                                        tensorflow.layers.conv2d(
-                                            feature["tensor"],
-                                            filters=self.filters,
-                                            kernel_size=[feature["kernel"], 1],
-                                            activation=self.activation,
-                                            reuse=reuse_conv,
-                                            name="conv_1_%s" % feature["name"],
-                                        ),
-                                        strides=[1, 1],
-                                        pool_size=[1, 1]
-                                    ) for feature in emb_features],
-                                    axis=1
-                                ),
-                            filters=self.filters,
-                            kernel_size=[len(self.embedding_features), 1],
-                            activation=self.activation,
-                            reuse=reuse_conv,
-                            name="conv_2"
-                        ),
-                        strides=[1, 1],
-                        pool_size=[1, 1]
-                )] + d_features,
-                axis=3
-            )
+        with tensorflow.name_scope("mention_embedding"):
+            return tensorflow.concat(
+                    [tensorflow.layers.max_pooling2d(
+                            tensorflow.layers.conv2d(
+                                    tensorflow.concat(
+                                        [tensorflow.layers.max_pooling2d(
+                                            tensorflow.layers.conv2d(
+                                                feature["tensor"],
+                                                filters=self.filters,
+                                                kernel_size=[feature["kernel"], 1],
+                                                activation=self.activation,
+                                                reuse=reuse_conv,
+                                                name="conv_1_%s" % feature["name"],
+                                            ),
+                                            strides=[1, 1],
+                                            pool_size=[1, 1]
+                                        ) for feature in emb_features],
+                                        axis=1,
+                                    ),
+                                filters=self.filters,
+                                kernel_size=[len(self.embedding_features), 1],
+                                activation=self.activation,
+                                reuse=reuse_conv,
+                                name="conv_2"
+                            ),
+                            strides=[1, 1],
+                            pool_size=[1, 1]
+                    )] + d_features,
+                    axis=3
+                )
 
     def _nn_mention_pair_embedding(self, emb_features, d_features, mention_pair_features):
-        return tensorflow.concat(
-                [tensorflow.layers.max_pooling2d(
-                tensorflow.layers.conv2d(
-                    tensorflow.concat([
-                        self._nn_mention_embedding(
-                            emb_features[0],
-                            d_features[0],
-                            reuse_conv=None
-                        ),
-                        self._nn_mention_embedding(
-                            emb_features[1],
-                            d_features[1],
-                            reuse_conv=True
-                        )
-                    ], axis=1),
-                    filters=self.filters,
-                    kernel_size=[2, 1],
-                    activation=self.activation,
-                    name="conv_3"
-                ),
-                strides=[1, 1],
-                pool_size=[1, 1]
-            )] + mention_pair_features,
-            axis=3
-        )
+        with tensorflow.name_scope("mention_pair_embedding"):
+            return tensorflow.concat(
+                    [tensorflow.layers.max_pooling2d(
+                    tensorflow.layers.conv2d(
+                        tensorflow.concat([
+                            self._nn_mention_embedding(
+                                emb_features[0],
+                                d_features[0],
+                                reuse_conv=None
+                            ),
+                            self._nn_mention_embedding(
+                                emb_features[1],
+                                d_features[1],
+                                reuse_conv=True
+                            )
+                        ], axis=1),
+                        filters=self.filters,
+                        kernel_size=[2, 1],
+                        activation=self.activation,
+                        name="conv_3"
+                    ),
+                    strides=[1, 1],
+                    pool_size=[1, 1]
+                )] + mention_pair_features,
+                axis=3
+            )
 
     def _nn_hidden_layer(self, inp, activation):
         return tensorflow.sigmoid(
@@ -134,13 +145,11 @@ class CNN():
             )
             for feature in self.mention_pair_features
         ]
-        label_placeholder = [
-            tensorflow.placeholder(
+        label_placeholder = tensorflow.placeholder(
                 dtype=tensorflow.float32,
-                shape=[1],
+                shape=(),
                 name="label"
             )
-        ]
 
         self._eval_nn = tensorflow.reduce_max(
             self._nn_hidden_layer(
@@ -150,10 +159,19 @@ class CNN():
                     mention_pair_placeholders),
                 tensorflow.nn.relu
             ),
-            axis=[3, 2]
         )
+#        printOp1 = tensorflow.Print(
+#            self._eval_nn,
+#            tensorflow.trainable_variables(),
+#            message="Trainable variables: "
+#        )
 
+        tensorflow.summary.scalar("summary_NN", self._eval_nn)
+        variable_summary("summary_weights", self._weights)
+        variable_summary("summary_biases", self._biases)
         loss = self.loss(label_placeholder, self._eval_nn)
+        tensorflow.summary.scalar("summary_NN_loss", loss)
+        self.summaries = tensorflow.summary.merge_all()
         self._train_nn = self.optimizer.minimize(loss)
 
     def _feature_placeholder_name(self, pref, feature):
@@ -164,12 +182,13 @@ class CNN():
 
         placeholders = {}
         for element in array:
+            res = session.run(lambda_val(element))
             placeholders[graph.get_tensor_by_name(
                 self._feature_placeholder_name(lambda_name, element)
-            )] = session.run(lambda_val(element))
+            )] = res
         return placeholders
 
-    def train_nn(self, session, mention_pair, label):
+    def train_nn(self, session, mention_pair, label, writer):
         graph = tensorflow.get_default_graph()
 
         placeholders = {}
@@ -191,9 +210,10 @@ class CNN():
             )
 
         placeholders[graph.get_tensor_by_name("label:0")] = \
-            session.run(label)
+            session.run(tensorflow.constant(label, dtype=tensorflow.float32))
 
-        session.run(self._train_nn, feed_dict=placeholders)
+        res, summary = session.run([self._train_nn, self.summaries], feed_dict=placeholders)
+        writer.add_summary(summary)
 
     def evaluate(self, session, mention_pair):
         placeholders = {}
@@ -214,4 +234,4 @@ class CNN():
                 self._create_placeholder_array(session, a, n, v)
             )
 
-        return session.run(self._eval_nn, feed_dict=placeholders)
+        return session.run(self._eval_nn, feed_dict=placeholders )

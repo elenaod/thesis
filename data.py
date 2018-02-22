@@ -22,7 +22,7 @@ from nltk import edit_distance
 
 import const
 from util import log, split_line, is_word, not_matching, strip_symbols, \
-                 EMBEDDING_SHAPE, stack_tensors, get_tensor
+                 EMBEDDING_SHAPE, stack_tensors, get_tensor, repack_tensors
 
 def main_character_heuristic(character_key):
     return "_and_" not in character_key and \
@@ -138,7 +138,7 @@ class Word(LLElement):
     def __init__(self, parent, lines, prev):
         # also add lemmatizer - should cut down on the warnings, at least
         LLElement.__init__(self, parent, prev)
-        input_data =self.parent.parent.parent.parent
+        input_data = self.parent.parent.parent.parent
         self.children = [l["inf"] for l in lines \
                         if all([f(l["inf"]) for f in input_data.filters])]
         assert None not in self.children, "invalid child found!"
@@ -146,16 +146,10 @@ class Word(LLElement):
         self.ner = strip_symbols("".join([l["ner_tag"] for l in lines]))
         self.mentionId = strip_symbols(lines[0]["mention_id"])
         self.mentionId = None if self.mentionId == "-" else int(self.mentionId)
-        if len(self.children) > 0:
-            self.embeddings = [[load_embedding(l) for load_embedding in input_data.wordEmbeddings] \
-                                for l in self.children]
-            self._notFound = any([any([e[1] for e in emb]) for emb in self.embeddings])
-        else:
-            self.embeddings = [[get_tensor(None)]]
-            self._notFound = False
-        self.embeddings = tensorflow.stack(
-            [tensorflow.stack([e[0] for e in emb]) for emb in self.embeddings]
-        )
+        self.embeddings = [input_data.wordEmbedding(l) for l in self.children]
+        if self.embeddings == []:
+            self.embeddings = [(get_tensor(None, shape=[1, 300]), False)]
+        self.embeddings = tensorflow.stack([e[0] for e in self.embeddings])
 
     def make_word(self, string):
         return strip_symbols(string)
@@ -170,9 +164,9 @@ class Word(LLElement):
     def get_word_tensor(self):
         idxs = range(0, len(self.children))
         if len(self.children) == 0:
-            return tensorflow.zeros([1, 300], dtype=tensorflow.float32)
+            return tensorflow.zeros([1, 1, 300], dtype=tensorflow.float32)
         if "oh" in " ".join(self.children):
-            return tensorflow.zeros([1, 300], dtype=tensorflow.float32)
+            return tensorflow.zeros([1, 1, 300], dtype=tensorflow.float32)
         tensors = []
         # TODO: turn this into a list comprehension?
         for i in idxs:
@@ -191,7 +185,7 @@ class Sentence(LLElement):
         self.split_into_words(self, lines)
         assert None not in self.children, "invalid child found!"
         if len(self.children) > 1:
-            self.embeddings = tensorflow.concat([c.embeddings for c in self.children], axis=0)
+            self.embeddings = repack_tensors([c.embeddings for c in self.children], axis=0)
         elif len(self.children) == 1:
             self.embeddings = self.children[0].embeddings
         else:
@@ -222,7 +216,7 @@ class Utterance(LLElement):
         self.split_into_sentences(lines)
         assert None not in self.children, "invalid child found!"
         if len(self.children) > 1:
-            self.embeddings = tensorflow.concat([c.embeddings for c in self.children], axis=0)
+            self.embeddings = repack_tensors([c.embeddings for c in self.children], axis=0)
         elif len(self.children) == 1:
             self.embeddings = self.children[0].embeddings
         else:
@@ -296,7 +290,7 @@ class InputData():
         - ner_tag - the NER tag of the word
         - mention_id - the ID of the entity which this word references.
     """
-    def __init__(self, filename, colInfo, wordEmbeddings=None, filters=None):
+    def __init__(self, filename, colInfo, wordEmbedding=None, filters=None):
         """
             Constructs an InputData object.
             @param: filename -- the name of the file containing the data
@@ -306,7 +300,7 @@ class InputData():
         log("info", "Reading from file %s" % filename)
         self._filename = filename
         self._columnInfo = colInfo
-        self.wordEmbeddings = wordEmbeddings
+        self.wordEmbedding = wordEmbedding
         self.filters = filters
         self._document_data = []
         with open(self._filename, 'r') as f:
@@ -314,8 +308,9 @@ class InputData():
 
     def get_all_documents(self):
         return (
-            Document([self._columnInfo(l) for l in s["lines"]], s["name"], self) \
-                     for s in self._document_data
+            Document([self._columnInfo(l) for l in s["lines"]],
+                      s["name"], self) \
+            for s in self._document_data
         )
 
     def get_documents_by_prefix(self, prefix):
